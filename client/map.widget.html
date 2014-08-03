@@ -1,0 +1,22 @@
+<template name="mapWidget">
+  <div class="map-widget">
+    <form class="form-inline manipulation-form" role="form">
+      <div class="form-group current-container">
+        <!-- can not be a input-group, input.typeahead -> becomes a span -->
+        <button class="btn btn-default geo-location current-location" type="button" title="Use my current location"><i></i></button>
+      </div>
+      <div class="form-group search-container">
+        <input autocomplete="off" id="map-location" placeholder="Search for a location..." title="Search for a location." data-placement="top" class="form-control search" type="text">
+      </div>
+      <div class="form-group">
+        <div class="distance-container input-group">
+          <input type="number" min="1" max="1500" step="1" class="distance form-control" value="5" />
+          <span class="input-group-addon">km</span>
+        </div>
+      </div>
+    </form>
+    <div class="map-container">
+      <div class="map"></div>
+    </div>
+  </div>
+</template>

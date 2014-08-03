@@ -1,0 +1,13 @@
+{
+  "name": "map-widget",
+  "description": "Leaflet map packed as widget for Meteor.",
+  "homepage": "",
+  "author": "Sven Buschbeck",
+  "version": "1.0.0",
+  "git": "",
+  "packages": {
+    "tools": {
+      "path": "../tools"
+    }
+  }  
+}
