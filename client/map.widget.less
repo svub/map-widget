@@ -1,16 +1,19 @@
 .map-widget {
+    position: relative;
     // avoid display:block when below screen.width 768px
     .form-inline { margin-bottom: .2em;
         .form-group {
             display: inline-block; margin-bottom: 0; vertical-align: middle;
         }
+        z-index: 1;
     }
-    .search-container { width: 16em;
+    .search-container { width: 10em;
         .twitter-typeahead, .search { width: 100%; }
     }
     .distance-container { width: 10em; .distance {} }
-    .map-container { position:relative;
-        min-width:30em; min-height:20em; width: 100%;
+    .map-container { position:relative; z-index: 0;
+        //min-width:30em; min-height:20em; width: 100%;
+        width: 100%; height: 100%;
         .map { position: absolute; top: 0; right: 0; bottom: 0; left: 0;
             .leaflet-control-container .leaflet-top { z-index: initial; }
         }

@@ -4,6 +4,11 @@ Template.mapWidget.rendered = ->
   @controller = new MapController container, @data
   container.data 'mapController', @controller
 
+defaultData = ->
+  area: false
+  areaType: 'circle'
+  readOnly: false
+
 
 class MapController
   constructor: (@container, @dataSource) ->
@@ -20,8 +25,11 @@ class MapController
   setData: (newData, force=false) -> if force or not EJSON.equals newData, @data then @data = newData; @ensureInit =>
     @doNotify = false
     logmr 'MapWidget.setData', @data
+    logmr 'MapWidget.setData merged', @data = _.extend defaultData(), @data
     @s = @data.show ? all: true
     if @data.readOnly then @s.form = false
+    #@data.areaType ?= 'circle'
+
     # TODO initv2: instead of showing and hiding, remove and add components in init method
     @c.map.toggle      @s.all ? @s.map      ? true
     @c.search.toggle   @s.all ? @s.search   ? true
@@ -33,17 +41,29 @@ class MapController
     @c.map.attr 'style', @data.style?.mapContainer
     @d.map.attr 'style', @data.style?.map
 
+    @plotMarkers() # to keep other markers behind marker
     if @s.marker ? @data.location? then @m.marker.addTo @m.map
     else @m.map.removeLayer @m.marker
     @updateLocation()
-    later =>
-      @plotMarkers()
-      later 50, => @doNotify = true
+    later 50, => @doNotify = true
 
   setDistance: (d) ->
     d ?= @data.location?.distance ? @defaultDistance
     @d.distance.val Math.round (between d, @minDistance, @maxDistance)/1000
-  getDistance: -> between (unlessNaN (1000*parseFloat @d.distance.val()), @minDistance), @minDistance, @maxDistance
+  isBbArea: -> @data.areaType is 'bounding-box'
+  getDistance: ->
+    if @isBbArea() then (u.l.distanceInMeters @m.map.getBounds())/2
+    else between (unlessNaN (1000*parseFloat @d.distance.val()), @minDistance), @minDistance, @maxDistance
+  getPosition: ->
+    if @isBbArea() then @m.map.getBounds().getCenter()
+    else @m.marker.getLatLng()
+  getBoundingBox: (asArray = false) ->
+    nesw = if @isBbArea() then [[(mb = @m.map.getBounds()).getNorth(), mb.getEast()],[mb.getSouth(), mb.getWest()]]
+    else u.l.createBoundingBox (ll = @m.marker.getLatLng()).lat, ll.lng, @getDistance(), true
+    if asArray then nesw
+    else
+      northEast: lat: nesw[0][0], lng: nesw[0][1]
+      southWest: lat: nesw[1][0], lng: nesw[1][1]
 
   #setLocation: (location = @data.location, moveInView = false, calculateDistance = true) ->
   setLocation: (location, moveInView = false, calculateDistance = true) ->
@@ -52,7 +72,7 @@ class MapController
   updateLocation: (moveInView = false, calculateDistance = true, notify = false) ->
     logmr 'MapWidget.updateLocation: location', @data.location
     unless (location = u.l.sanitize @data.location)?
-      if @data.markers?.length and (b = L.latLngBounds (m.location for m in @data.markers))?
+      if not @isBbArea() and @data.markers?.length and (b = L.latLngBounds (m.location for m in @data.markers))?
         logmr 'MapWidget.updateLocation: l from markers..., b', b
         logmr 'MapWidget.updateLocation: location', location = b.getCenter()
         bounds = [[b.getNorth(), b.getEast()], [b.getSouth(), b.getWest()]]
@@ -61,10 +81,10 @@ class MapController
       else
         @m.map.fitWorld()
       @updateArea false, false # hide area marker without location
-    if calculateDistance then @setDistance()
+    if calculateDistance and not @isBbArea() then @setDistance()
     @m.marker.setLatLng location ? [0,0]
     if @data.location?
-      @updateArea moveInView, undefined, true
+      @updateArea moveInView, undefined, not @isBbArea()
     @updateSearch()
     if notify then @notify()
   moveLocation: (latLng, moveInView = false) ->
@@ -74,21 +94,27 @@ class MapController
     @updateArea moveInView
     @enrichLocation latLng
   # changed throttle to debounce so that map.zoom is updated
-  enrichLocation: debounce 100, (latLng = @m.marker.getLatLng()) ->
+  enrichLocation: debounce 100, (latLng = @getPosition()) ->
     u.l.createFromPoint latLng.lat, latLng.lng, @getDistance(), @m.map.getZoom(), (location) =>
-      location.distance = @getDistance() # overwrite distance with current one so that the area does not jump when the enrichment finishes but the radius has changed in the meantime
+      # overwrite distance with current one so that the area does not jump when the enrichment finishes but the radius has changed in the meantime
+      location.distance = @getDistance()
+      _.extend location, @getBoundingBox()
       @setLocation location, false, false
 
   updateArea: (moveInView = false, area = @data.area, forceZoom = false) ->
     coordinates = @m.marker.getLatLng()
     distance = @getDistance()
     logm "MapWidget.updateArea moveInView=#{moveInView}; areaType=#{@data.areaType}; dist=#{distance}; coordinates", coordinates
-    if area
-      (if @data.areaType is 'rect' then @updateRectangle else @updateCircle).call @, coordinates, distance
+    if area and not @isBbArea()
+      #(if @data.areaType is 'rect' then @updateRectangle else @updateCircle).call @, coordinates, distance
+      switch @data.areaType
+        when 'rect' then @updateRectangle coordinates, distance
+        when 'circle' then @updateCircle coordinates, distance
     else
       @m.map.removeLayer @m.rect
       @m.map.removeLayer @m.circle
-    if area or forceZoom then later 10, => @autoZoom moveInView, coordinates, distance
+    if (area and not @isBbArea()) or forceZoom
+      later 10, => @autoZoom moveInView, coordinates, distance
   updateRectangle: (coordinates, distance) ->
     @m.rect.setBounds bounds = u.l.createBoundingBox(coordinates.lat, coordinates.lng, distance, true)
     @m.rect.addTo @m.map
@@ -120,19 +146,29 @@ class MapController
 
   # coordinates can be bounds array, too
   autoZoom: (zoom = false, coordinates = @m.marker.getLatLng(), distance = @getDistance()) ->
-      bounds = if (_.isArray coordinates) then coordinates
-      else u.l.createBoundingBox coordinates.lat, coordinates.lng, distance*1.1, true
-      logmr 'MapWidget.autoZoom: coords, z, d, b', coordinates, zoom, distance, bounds
-      if (mapBounds = @m.map.getBounds()).contains bounds # zoom in?
-        logmr 'MapWidget.autoZoom: zoom in', mapBounds.toBBoxString()
-        if distance * 5 < u.l.distanceInMeters mapBounds # much smaller, zoom in
-          try @m.map.fitBounds bounds
-      else # zoom out?
-        logmr 'MapWidget.autoZoom: zoom out', mapBounds.toBBoxString()
-        boundsMuchBigger = not @m.map.getBounds().pad(2).contains bounds
-        logmr 'MapWidget.autoZoom: bounds, muchBigger', bounds, boundsMuchBigger
-        if zoom or boundsMuchBigger then @m.map.fitBounds bounds
-        else @m.map.panTo coordinates
+      #bounds = if (_.isArray coordinates) then coordinates
+      #else u.l.createBoundingBox coordinates.lat, coordinates.lng, distance*1.1, true
+      if @isBbArea()
+        bounds = if (l = @data.location).northEast? and l.southWest?
+          L.latLngBounds l.southWest, l.northEast
+        else L.latLngBounds u.l.createBoundingBox l, true
+        logmr 'MapWidget.autoZoom: l, b', l, bounds
+        try @m.map.fitBounds bounds
+      else
+        bounds = if (_.isArray coordinates) then coordinates
+        else u.l.createBoundingBox coordinates.lat, coordinates.lng, distance*1.1, true
+        logmr 'MapWidget.autoZoom: coords, z, d, b', coordinates, zoom, distance, bounds
+        if (mapBounds = @m.map.getBounds()).contains bounds # zoom in?
+          logmr 'MapWidget.autoZoom: zoom in', mapBounds.toBBoxString()
+          if distance * 5 < u.l.distanceInMeters mapBounds # much smaller, zoom in
+            try @m.map.fitBounds bounds
+        else # zoom out?
+          logmr 'MapWidget.autoZoom: zoom out', mapBounds.toBBoxString()
+          boundsMuchBigger = not @m.map.getBounds().pad(2).contains bounds
+          logmr 'MapWidget.autoZoom: bounds, muchBigger', bounds, boundsMuchBigger
+          if zoom or boundsMuchBigger then @m.map.fitBounds bounds
+          else @m.map.panTo coordinates
+
       later 2, =>
         logmr 'MapWidget.autoZoom: new bounds', @m.map.getBounds().toBBoxString()
 
@@ -175,7 +211,7 @@ class MapController
     n=(b=@m.map.getBounds()).getNorth();s=b.getSouth();w=b.getWest();e=b.getEast()
     width = u.l.distanceInMeters n, e, n, w
     height = u.l.distanceInMeters n, e, s, e
-    @setDistance .45 * Math.min width, height
+    if not @isBbArea() then @setDistance .45 * Math.min width, height
     @moveLocation event.latlng
   geoLocationClicked: ->
     @d.currentLocation.addClass 'active'
@@ -223,15 +259,19 @@ class MapController
       @d.map.data 'leafletMap', map
       @m.rect = (L.rectangle [[0,0],[0,0]], { color: u.pickLocationRectColor, weight: 1 })
       @m.circle = (L.circle [0,0], 0, { color: u.pickLocationRectColor, weight: 1 })
-      @m.marker = L.marker [0, 0], title: 'current location'
+      @m.marker = L.marker [0, 0], title: 'current location', zIndexOffset: 1
 
     # hook up event handlers
+    areaChanged = =>
+      @distanceChangedUpdateLocationDuring()
+      @distanceChangedUpdateLocationAfter()
+      @distanceChangedUpdateArea()
     #@d.distance.on 'change', => @distanceChanged()
     unless @data.readOnly
-      @d.distance.on 'change', =>
-        @distanceChangedUpdateLocationDuring()
-        @distanceChangedUpdateLocationAfter()
-        @distanceChangedUpdateArea()
+      @d.distance.on 'change', -> areaChanged()
+      @m.map.on 'zoomend', =>
+        log '$$$$$$$'
+        if @isBbArea() then log '########'; areaChanged()
       @m.map.on 'click', (e) => @mapClicked e
       @d.currentLocation.on 'click', => @geoLocationClicked()
 
