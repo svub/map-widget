@@ -214,10 +214,12 @@ class MapController
     if not @isBbArea() then @setDistance .45 * Math.min width, height
     @moveLocation event.latlng
   geoLocationClicked: ->
-    @d.currentLocation.addClass 'active'
+    #@d.currentLocation.addClass 'active'
+    @busy true
     u.x.currentLocation (location) =>
       @setLocation location, true
-      later 10, => @d.currentLocation.removeClass 'active'
+      #later 10, => @d.currentLocation.removeClass 'active'
+      later 10, => @busy false
   notify: -> if @doNotify and @data.onChange? then @runNotify()
   runNotify: debounce 500, ->
     (l = @data.location)?.distance = distance = @getDistance()
@@ -230,6 +232,10 @@ class MapController
       return
     @doInit()
     done()
+  busyTimeout: u.debounce 5000, -> @busy false
+  busy: (isBusy = false) ->
+    @m.spinner.toggle isBusy
+    if isBusy then @busyTimeout()
 
   _doInit: ->
     # TODO initv2: remove once; instead, add and remove components as configured
@@ -245,10 +251,13 @@ class MapController
       search: $ '.search', @c.search
       distance: $ '.distance', @c.distance
       currentLocation: $ '.current-location', @c.current
-    # init leaflet map and layers
     # @m.search = u.w.createLocationTypeahead @d.search, @data.location?.label, ((event, location) => @setLocation location, true), => @data.location
-    @m.search = u.w.createLocationTypeahead2 @d.search, ((event, location) => @setLocation location, true), => @data.location
+    @m.spinner = ($ '.fa-spinner', @container).hide()
+    onSelectL = (event, location) => @setLocation location, true
+    initL = => @data.location
+    @m.search = u.w.createLocationTypeahead @d.search, onSelectL, initL, (isBusy) => @busy isBusy
     #@m.search.addClear? showOnLoad: true, top: null, right: null, onClear: => @setLocation null, true
+    # init leaflet map and layers
     unless @d.map?.length then @c.map.empty().append(@d.map = $ '<div class="map"></div>')
     unless (@m.map = @d.map.data 'leafletMap')?
       @m.map = map = L.map @d.map[0],
