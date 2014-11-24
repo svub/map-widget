@@ -95,7 +95,10 @@ class MapController
     @enrichLocation latLng
   # changed throttle to debounce so that map.zoom is updated
   enrichLocation: debounce 100, (latLng = @getPosition()) ->
-    u.l.createFromPoint latLng.lat, latLng.lng, @getDistance(), @m.map.getZoom(), (location) =>
+    # match leaflet.zoom with OSM zoom, usually too detailed
+    zoom = @m.map.getZoom()
+    zoom = Math.max 0, zoom-(if zoom > 7 then 3 else 2)
+    u.l.createFromPoint latLng.lat, latLng.lng, @getDistance(), zoom, (location) =>
       # overwrite distance with current one so that the area does not jump when the enrichment finishes but the radius has changed in the meantime
       location.distance = @getDistance()
       _.extend location, @getBoundingBox()
@@ -140,9 +143,12 @@ class MapController
     try @m.map.invalidateSize()
     if repeat > 1 then later 50, => @updateSize repeat-1
 
-  update: (repeat = 1) -> # force updating: reload data, reinit map view
+  forceUpdate: (repeat = 1) ->
     later  5, => try @updateSize repeat
     later 15, => try @setData @dataSource(), true
+
+  update: u.debounce 500, (repeat = 1) -> # force updating: reload data, reinit map view
+    @forceUpdate repeat
 
   # coordinates can be bounds array, too
   autoZoom: (zoom = false, coordinates = @m.marker.getLatLng(), distance = @getDistance()) ->
@@ -216,8 +222,8 @@ class MapController
   geoLocationClicked: ->
     #@d.currentLocation.addClass 'active'
     @busy true
-    u.x.currentLocation (location) =>
-      @setLocation location, true
+    u.x.currentLocation true, (location) =>
+      @setLocation location, true unless location is false
       #later 10, => @d.currentLocation.removeClass 'active'
       later 10, => @busy false
   notify: -> if @doNotify and @data.onChange? then @runNotify()
@@ -279,8 +285,7 @@ class MapController
     unless @data.readOnly
       @d.distance.on 'change', -> areaChanged()
       @m.map.on 'zoomend', =>
-        log '$$$$$$$'
-        if @isBbArea() then log '########'; areaChanged()
+        if @isBbArea() then log 'MapWidget.zoomend with bb area > changed'; areaChanged()
       @m.map.on 'click', (e) => @mapClicked e
       @d.currentLocation.on 'click', => @geoLocationClicked()
 
